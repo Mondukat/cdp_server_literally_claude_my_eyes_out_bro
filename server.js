@@ -14,9 +14,14 @@ app.use(express.json());
 // Supports both file-based key (local) and env var (Railway)
 let cdp;
 if (process.env.CDP_API_KEY_NAME && process.env.CDP_API_KEY_PRIVATE_KEY) {
+  // Normalize the private key - handle both escaped \n and real newlines
+  const rawKey = process.env.CDP_API_KEY_PRIVATE_KEY;
+  const privateKey = rawKey.includes("\\n")
+    ? rawKey.replace(/\\n/g, "\n")
+    : rawKey;
   cdp = new Coinbase({
     apiKeyName: process.env.CDP_API_KEY_NAME,
-    privateKey: process.env.CDP_API_KEY_PRIVATE_KEY.replace(/\\n/g, "\n"),
+    privateKey,
   });
 } else if (fs.existsSync("cdp_api_key.json")) {
   cdp = Coinbase.configureFromJson({ filePath: "cdp_api_key.json" });
