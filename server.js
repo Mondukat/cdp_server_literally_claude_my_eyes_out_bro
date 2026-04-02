@@ -62,7 +62,12 @@ app.post("/wallet/create", async (req, res) => {
     res.json({ walletId, address, networkId });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({
+      error: err.message || "Unknown error",
+      apiCode: err.apiCode,
+      apiMessage: err.apiMessage,
+      httpCode: err.httpCode,
+    });
   }
 });
 
