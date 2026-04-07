@@ -215,6 +215,184 @@ app.post("/wallet/:walletId/sign", async (req, res) => {
   }
 });
 
+// ── Advanced Trade API ───────────────────────────────────────────────────────
+// Uses CDP API keys to authenticate with Coinbase Advanced Trade REST API
+// Base URL: https://api.coinbase.com
+
+function buildJWT(method, path) {
+  const keyName = process.env.CDP_API_KEY_NAME;
+  const rawKey = process.env.CDP_API_KEY_PRIVATE_KEY;
+  if (!keyName || !rawKey) throw new Error("CDP credentials not configured");
+
+  const privateKey = rawKey.includes("\\n") ? rawKey.replace(/\\n/g, "\n") : rawKey;
+  const uri = `${method} api.coinbase.com${path}`;
+  const now = Math.floor(Date.now() / 1000);
+
+  const header = { alg: "ES256", kid: keyName, nonce: crypto.randomBytes(16).toString("hex"), typ: "JWT" };
+  const payload = { sub: keyName, iss: "cdp", aud: ["cdp_service"], nbf: now, exp: now + 120, uris: [uri] };
+
+  const encode = (obj) => Buffer.from(JSON.stringify(obj)).toString("base64url");
+  const signingInput = `${encode(header)}.${encode(payload)}`;
+  const sign = crypto.createSign("SHA256");
+  sign.update(signingInput);
+  const sig = sign.sign({ key: privateKey, dsaEncoding: "ieee-p1363" });
+
+  return `${signingInput}.${sig.toString("base64url")}`;
+}
+
+async function advancedTradeRequest(method, path, body = null) {
+  const jwt = buildJWT(method, path);
+  const opts = {
+    method,
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      "Content-Type": "application/json",
+    },
+  };
+  if (body) opts.body = JSON.stringify(body);
+
+  const resp = await fetch(`https://api.coinbase.com${path}`, opts);
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(`AT API ${resp.status}: ${JSON.stringify(data)}`);
+  return data;
+}
+
+// List all accounts (exchange balances)
+app.get("/trade/accounts", async (req, res) => {
+  try {
+    const data = await advancedTradeRequest("GET", "/api/v3/brokerage/accounts");
+    res.json(data);
+  } catch (err) {
+    console.error("[trade/accounts]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List portfolios
+app.get("/trade/portfolios", async (req, res) => {
+  try {
+    const data = await advancedTradeRequest("GET", "/api/v3/brokerage/portfolios");
+    res.json(data);
+  } catch (err) {
+    console.error("[trade/portfolios]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Portfolio breakdown
+app.get("/trade/portfolios/:portfolioId", async (req, res) => {
+  try {
+    const data = await advancedTradeRequest("GET", `/api/v3/brokerage/portfolios/${req.params.portfolioId}`);
+    res.json(data);
+  } catch (err) {
+    console.error("[trade/portfolio]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get product (market) info
+app.get("/trade/products", async (req, res) => {
+  try {
+    const limit = req.query.limit || 50;
+    const data = await advancedTradeRequest("GET", `/api/v3/brokerage/products?limit=${limit}`);
+    res.json(data);
+  } catch (err) {
+    console.error("[trade/products]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get specific product
+app.get("/trade/products/:productId", async (req, res) => {
+  try {
+    const data = await advancedTradeRequest("GET", `/api/v3/brokerage/products/${req.params.productId}`);
+    res.json(data);
+  } catch (err) {
+    console.error("[trade/product]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get product candles
+app.get("/trade/products/:productId/candles", async (req, res) => {
+  try {
+    const { start, end, granularity = "ONE_HOUR" } = req.query;
+    let qs = `?granularity=${granularity}`;
+    if (start) qs += `&start=${start}`;
+    if (end) qs += `&end=${end}`;
+    const data = await advancedTradeRequest("GET", `/api/v3/brokerage/products/${req.params.productId}/candles${qs}`);
+    res.json(data);
+  } catch (err) {
+    console.error("[trade/candles]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Place order
+app.post("/trade/orders", async (req, res) => {
+  try {
+    const { product_id, side, order_type = "market", size, limit_price, client_order_id } = req.body;
+    if (!product_id || !side) return res.status(400).json({ error: "Missing product_id or side" });
+
+    const orderConfig = {};
+    if (order_type === "market") {
+      if (side === "BUY") orderConfig.market_market_ioc = { quote_size: size };
+      else orderConfig.market_market_ioc = { base_size: size };
+    } else if (order_type === "limit") {
+      orderConfig.limit_limit_gtc = { base_size: size, limit_price, post_only: false };
+    }
+
+    const data = await advancedTradeRequest("POST", "/api/v3/brokerage/orders", {
+      client_order_id: client_order_id || crypto.randomUUID(),
+      product_id,
+      side: side.toUpperCase(),
+      order_configuration: orderConfig,
+    });
+    res.json(data);
+  } catch (err) {
+    console.error("[trade/orders]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List orders
+app.get("/trade/orders", async (req, res) => {
+  try {
+    const { product_id, status = "OPEN" } = req.query;
+    let qs = `?order_status=${status}`;
+    if (product_id) qs += `&product_id=${product_id}`;
+    const data = await advancedTradeRequest("GET", `/api/v3/brokerage/orders/historical/batch${qs}`);
+    res.json(data);
+  } catch (err) {
+    console.error("[trade/orders/list]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Cancel order
+app.delete("/trade/orders/:orderId", async (req, res) => {
+  try {
+    const data = await advancedTradeRequest("POST", "/api/v3/brokerage/orders/batch_cancel", {
+      order_ids: [req.params.orderId],
+    });
+    res.json(data);
+  } catch (err) {
+    console.error("[trade/orders/cancel]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Transaction history
+app.get("/trade/transactions", async (req, res) => {
+  try {
+    const data = await advancedTradeRequest("GET", "/api/v3/brokerage/transaction_summary");
+    res.json(data);
+  } catch (err) {
+    console.error("[trade/transactions]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Start ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ CDP Server Wallet running on port ${PORT}`));
+app.listen(PORT, () => console.log(`✅ CDP Server Wallet + Advanced Trade running on port ${PORT}`));
