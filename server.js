@@ -397,3 +397,4 @@ app.get("/trade/transactions", async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ CDP Server Wallet + Advanced Trade running on port ${PORT}`));
 // deployed 20260407T155641Z
+// redeploy 20260408T165122Z
