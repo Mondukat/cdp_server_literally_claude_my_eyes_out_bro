@@ -10,7 +10,7 @@
   "dependencies": {
     "@coinbase/coinbase-sdk": "^0.10.0",
     "cors": "^2.8.5",
-    "express": "^4.19.2"
+    "express": "^4.22.2"
   }
 }
 
